@@ -45,6 +45,8 @@ dependencies {
     // --- Vosk offline speech-to-text --------------------
     implementation("com.alphacephei:vosk-android:0.3.47")
 
+    implementation("androidx.appcompat:appcompat:1.7.0")
+
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.activity.compose)

@@ -11,8 +11,12 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.tooling.preview.Preview
+import androidx.lifecycle.lifecycleScope
 import me.dgol.friday.ui.theme.FridayTheme
-
+import me.dgol.friday.shared.stt.ModelManager
+import android.widget.Toast
+import androidx.appcompat.app.AlertDialog
+import kotlinx.coroutines.launch
 
 
 class MainActivity : ComponentActivity() {
@@ -28,6 +32,23 @@ class MainActivity : ComponentActivity() {
                     )
                 }
             }
+        }
+        if (!ModelManager.isModelReady(this)) {
+            AlertDialog.Builder(this)
+                .setTitle("Download voice model?")
+                .setMessage("Friday needs ~50 MB to recognise speech offline.")
+                .setPositiveButton("Download") { _, _ ->
+                    lifecycleScope.launch {
+                        ModelManager.downloadDefaultModel(this@MainActivity)
+                        Toast.makeText(
+                            this@MainActivity,
+                            "Model ready!",
+                            Toast.LENGTH_SHORT            // ← prefixed constant
+                        ).show()
+                    }
+                }
+                .setNegativeButton("Cancel", null)
+                .show()
         }
     }
 }
