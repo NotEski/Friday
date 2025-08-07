@@ -40,6 +40,10 @@ android {
 }
 
 dependencies {
+    implementation(project(":shared"))
+
+    // --- Vosk offline speech-to-text --------------------
+    implementation("com.alphacephei:vosk-android:0.3.47")
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
