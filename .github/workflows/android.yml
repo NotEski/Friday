@@ -32,6 +32,9 @@ jobs:
         key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
 
     # 4️⃣  Make the debug APK (mobile module)
+    - name: Make gradlew executable
+      run: chmod +x ./gradlew
+
     - name: Assemble Debug
       run: ./gradlew :mobile:assembleDebug
 
