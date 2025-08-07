@@ -19,5 +19,6 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "Friday"
-include(":app")
+rootProject.name = "FridayVoiceAssistant"
+include(":mobile")
+include(":shared")
