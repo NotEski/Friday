@@ -28,9 +28,8 @@ class FridayRecognitionService : RecognitionService() {
                 return@launch
             }
 
-            val model = withContext(Dispatchers.IO) {
-                Model(ModelManager.modelPath(ctx))
-            }
+            val modelPath = withContext(Dispatchers.IO) { ModelManager.ensureModel(ctx) }
+            val model = org.vosk.Model(modelPath)
 
             val recognizer = Recognizer(model, 16000f)
 

@@ -17,6 +17,8 @@ import me.dgol.friday.shared.stt.ModelManager
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import kotlinx.coroutines.launch
+import android.util.Log
+
 
 
 class MainActivity : ComponentActivity() {
@@ -33,22 +35,24 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
-        if (!ModelManager.isModelReady(this)) {
-            AlertDialog.Builder(this)
-                .setTitle("Download voice model?")
-                .setMessage("Friday needs ~50 MB to recognise speech offline.")
-                .setPositiveButton("Download") { _, _ ->
-                    lifecycleScope.launch {
-                        ModelManager.downloadDefaultModel(this@MainActivity)
-                        Toast.makeText(
-                            this@MainActivity,
-                            "Model ready!",
-                            Toast.LENGTH_SHORT            // ← prefixed constant
-                        ).show()
-                    }
-                }
-                .setNegativeButton("Cancel", null)
-                .show()
+        val ready = ModelManager.isModelReady(this)
+        Log.d("Friday", "Model ready? $ready  path=${ModelManager.modelPathOrNull(this)}")
+        Toast.makeText(this, "Model ready? $ready", Toast.LENGTH_SHORT).show()
+
+        if (!ready) {
+        lifecycleScope.launch {
+            try {
+                // Either ensureModel(...) OR the shim downloadDefaultModel(...)
+                ModelManager.ensureModel(this@MainActivity)
+                Toast.makeText(this@MainActivity, "Model ready!", Toast.LENGTH_SHORT).show()
+            } catch (t: Throwable) {
+                Toast.makeText(
+                    this@MainActivity,
+                    "Download failed: ${t.message}",
+                    Toast.LENGTH_LONG
+                ).show()
+            }
+        }
         }
     }
 }
