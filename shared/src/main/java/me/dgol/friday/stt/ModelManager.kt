@@ -7,21 +7,25 @@ import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
 import java.net.URL
+import java.security.MessageDigest
 import java.util.zip.ZipEntry
 import java.util.zip.ZipInputStream
 
 /**
  * Vosk model lifecycle helper.
  *
- * Layout on disk (per language):
- *   <filesDir>/vosk/<lang>/  ...unzipped model...
- * The actual recognizer root is the folder that contains conf/model.conf.
+ * On-disk layout:
+ *   <filesDir>/vosk/<lang>/<name>/ ...unzipped model...
+ * The recognizer root is the folder that contains conf/model.conf.
+ *
+ * Supports:
+ *  - Static catalog (simple)
+ *  - Dynamic registry entries (name/url/version/size)
  */
 object ModelManager {
 
-    // ---- Catalog ----
-    // Add more entries as you need. Labels are user-facing; sizes are informational only.
-    data class ModelInfo(
+    // ---- Minimal static catalog (kept for defaults/fallbacks) ----
+    data class CatalogModel(
         val lang: String,
         val label: String,
         val url: String,
@@ -29,70 +33,128 @@ object ModelManager {
     )
 
     private const val LANG_DEFAULT = "en-us"
-
-    private val MODEL_CATALOG: Map<String, ModelInfo> = listOf(
-        ModelInfo(
+    private val STATIC_CATALOG: Map<String, CatalogModel> = listOf(
+        CatalogModel(
             lang = "en-us",
             label = "English (US) — small",
             url = "https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip",
             approxSizeMb = 50
         )
-        // Add more here, e.g.:
-        // ModelInfo("en-au", "English (AU) — small", "https://...", 55)
     ).associateBy { it.lang }
 
-    fun availableModels(): List<ModelInfo> = MODEL_CATALOG.values.toList()
-    fun getInfo(lang: String): ModelInfo? = MODEL_CATALOG[lang]
     fun defaultLang(): String = LANG_DEFAULT
+
+    // ---- Registry entry (from Vosk JSON) ----
+    data class RegistryEntry(
+        val lang: String,
+        val langText: String,
+        val name: String,        // e.g., vosk-model-small-en-us-0.15
+        val url: String,
+        val version: String?,
+        val sizeBytes: Long?,
+        val sizeText: String?,
+        val type: String?,       // asr / tts
+        val obsolete: Boolean
+    )
 
     // ---- Paths ----
     private fun baseDir(ctx: Context) = File(ctx.filesDir, "vosk")
     private fun langDir(ctx: Context, lang: String) = File(baseDir(ctx), lang)
+    private fun nameDir(ctx: Context, lang: String, name: String) = File(langDir(ctx, lang), name)
 
     /** Scan for the actual model root (dir that contains conf/model.conf) */
     private fun findModelRoot(dir: File): File? {
-        dir.walkTopDown().maxDepth(4).forEach { f ->
+        if (!dir.exists()) return null
+        dir.walkTopDown().maxDepth(5).forEach { f ->
             if (File(f, "conf/model.conf").exists()) return f
         }
         return null
     }
 
-    /** Returns true if a valid model is present for the given language. */
-    fun isModelReady(ctx: Context, lang: String = LANG_DEFAULT): Boolean =
-        findModelRoot(langDir(ctx, lang)) != null
+    // ---- Presence / cleanup ----
 
-    /** Deletes the language folder (used to reset/corrupt downloads). */
-    fun clearModel(ctx: Context, lang: String = LANG_DEFAULT) {
-        langDir(ctx, lang).deleteRecursively()
+    /** Returns true if any valid model for the lang exists. */
+    fun isModelReady(ctx: Context, lang: String = LANG_DEFAULT): Boolean =
+        listInstalledModels(ctx, lang).isNotEmpty()
+
+    /** Return the recognizer root for a specific <lang>/<name> if present, else null. */
+    fun modelRootByNameOrNull(ctx: Context, lang: String, name: String): File? =
+        findModelRoot(nameDir(ctx, lang, name))
+
+    /** List installed models under a language. */
+    fun listInstalledModels(ctx: Context, lang: String): List<File> {
+        val ldir = langDir(ctx, lang)
+        if (!ldir.isDirectory) return emptyList()
+        return ldir.listFiles()?.mapNotNull { findModelRoot(it) } ?: emptyList()
     }
 
-    /**
-     * Ensure the model exists locally; download+unzip if needed.
-     * Returns the absolute path to the recognizer root (dir containing conf/model.conf).
-     */
+    /** Deletes a specific installed model by <lang>/<name>. */
+    fun clearModel(ctx: Context, lang: String, name: String? = null) {
+        val dir = if (name == null) langDir(ctx, lang) else nameDir(ctx, lang, name)
+        dir.deleteRecursively()
+    }
+
+    // ---- Ensure from static catalog (backwards compatible) ----
+
     suspend fun ensureModel(ctx: Context, lang: String = LANG_DEFAULT): String =
         withContext(Dispatchers.IO) {
-            val info = getInfo(lang) ?: error("Unknown model language: $lang")
-            val dest = langDir(ctx, lang)
-
-            if (!isModelReady(ctx, lang)) {
-                // Clean target then download+unzip
-                dest.deleteRecursively()
-                dest.mkdirs()
-                val tmpZip = File.createTempFile("vosk-$lang", ".zip", ctx.cacheDir)
-                try {
-                    URL(info.url).openStream().use { input ->
-                        FileOutputStream(tmpZip).use { output -> input.copyTo(output) }
-                    }
-                    unzip(tmpZip, dest)
-                } finally {
-                    tmpZip.delete()
-                }
-            }
-            val root = findModelRoot(dest)
-                ?: error("Vosk model extracted but conf/model.conf not found")
+            val info = STATIC_CATALOG[lang] ?: error("Unknown static catalog lang: $lang")
+            val name = staticNameFromUrl(info.url) // e.g. vosk-model-small-en-us-0.15
+            val root = ensureModelFromUrlInternal(ctx, lang, name, info.url, expectedMd5 = null)
             root.absolutePath
         }
+
+    private fun staticNameFromUrl(url: String): String =
+        url.substringAfterLast('/').substringBeforeLast(".zip")
+
+    // ---- Ensure from live registry ----
+
+    /**
+     * Download & install a registry model into <filesDir>/vosk/<lang>/<name>
+     * Returns the recognizer root directory.
+     */
+    suspend fun ensureModelFromRegistry(ctx: Context, entry: RegistryEntry): File =
+        withContext(Dispatchers.IO) {
+            require(!entry.obsolete) { "Model '${entry.name}' is marked obsolete" }
+            ensureModelFromUrlInternal(ctx, entry.lang, entry.name, entry.url, expectedMd5 = null)
+        }
+
+    /** Internal downloader/unzipper. Verifies model root exists after unpack. */
+    private fun ensureModelFromUrlInternal(
+        ctx: Context,
+        lang: String,
+        name: String,
+        url: String,
+        expectedMd5: String?
+    ): File {
+        val dest = nameDir(ctx, lang, name)
+        if (findModelRoot(dest) != null) return findModelRoot(dest)!!
+
+        dest.deleteRecursively()
+        dest.mkdirs()
+
+        val tmpZip = File.createTempFile("vosk-$lang-$name", ".zip", ctx.cacheDir)
+        try {
+            URL(url).openStream().use { input ->
+                FileOutputStream(tmpZip).use { output -> input.copyTo(output) }
+            }
+
+            if (!expectedMd5.isNullOrBlank()) {
+                val md5 = tmpZip.md5()
+                check(md5.equals(expectedMd5, ignoreCase = true)) {
+                    "MD5 mismatch for $name: expected $expectedMd5, got $md5"
+                }
+            }
+
+            unzip(tmpZip, dest)
+        } finally {
+            tmpZip.delete()
+        }
+
+        return requireNotNull(findModelRoot(dest)) {
+            "Vosk model extracted but conf/model.conf not found in $name"
+        }
+    }
 
     private fun unzip(zipFile: File, destDir: File) {
         ZipInputStream(zipFile.inputStream().buffered()).use { zis ->
@@ -111,25 +173,30 @@ object ModelManager {
         }
     }
 
-    // ---- Convenience helpers for service/UI layers ----
+    private fun File.md5(): String {
+        val md = MessageDigest.getInstance("MD5")
+        inputStream().use { ins ->
+            val buf = ByteArray(16 * 1024)
+            while (true) {
+                val r = ins.read(buf)
+                if (r <= 0) break
+                md.update(buf, 0, r)
+            }
+        }
+        return md.digest().joinToString("") { "%02x".format(it) }
+    }
 
-    /** Like ensureModel(...) but returns a File to the recognizer root. */
+    // ---- Convenience helpers kept from earlier API ----
+
     suspend fun ensureModelFile(ctx: Context, lang: String = LANG_DEFAULT): File =
         File(ensureModel(ctx, lang))
 
-    /** Returns the recognizer root directory if present, else null (no download). */
-    fun modelRootOrNull(ctx: Context, lang: String = LANG_DEFAULT): File? =
-        findModelRoot(langDir(ctx, lang))
+    fun modelRootOrNull(ctx: Context, lang: String = LANG_DEFAULT): File? {
+        // Prefer any installed named model; otherwise null
+        val installed = listInstalledModels(ctx, lang)
+        return installed.firstOrNull()
+    }
 
-    // ---- Compatibility shims (existing names kept) ----
-
-    /** Old name: download the default model (returns its root path) */
-    suspend fun downloadDefaultModel(ctx: Context): String = ensureModel(ctx, LANG_DEFAULT)
-
-    /** Old helper: path to the language folder (not necessarily the recognizer root) */
-    fun modelDir(ctx: Context, lang: String = LANG_DEFAULT): File = langDir(ctx, lang)
-
-    /** Convenience: returns the actual root path if present, else null */
     fun modelPathOrNull(ctx: Context, lang: String = LANG_DEFAULT): String? =
-        findModelRoot(langDir(ctx, lang))?.absolutePath
+        modelRootOrNull(ctx, lang)?.absolutePath
 }

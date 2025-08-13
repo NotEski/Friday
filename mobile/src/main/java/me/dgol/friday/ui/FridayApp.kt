@@ -28,10 +28,11 @@ fun FridayApp(fromAssistInitial: Boolean) {
     val ui by vm.ui.collectAsState()
     val context = LocalContext.current
 
-    // Ensure view model has initial state (selected model + list)
+    // Ensure view model has initial state (selected model + registry)
     LaunchedEffect(Unit) { vm.init(context.applicationContext) }
 
     var showModels by remember { mutableStateOf(false) }
+    var showDownloads by remember { mutableStateOf(false) }
 
     val micPermission = Manifest.permission.RECORD_AUDIO
     val hasMicPermission = remember {
@@ -54,37 +55,68 @@ fun FridayApp(fromAssistInitial: Boolean) {
         }
     }
 
+    // Refresh downloads when entering the screen
+    LaunchedEffect(showDownloads) {
+        if (showDownloads) vm.refreshDownloads(context.applicationContext)
+    }
+
     MaterialTheme {
         Scaffold(
             topBar = {
                 CenterAlignedTopAppBar(
-                    title = { Text(if (showModels) "Friday — Models" else "Friday") },
+                    title = {
+                        Text(
+                            when {
+                                showModels -> "Friday — Models"
+                                showDownloads -> "Friday — Downloaded"
+                                else -> "Friday"
+                            }
+                        )
+                    },
                     actions = {
-                        if (!showModels) {
-                            TextButton(onClick = { showModels = true }) { Text("Models") }
-                        } else {
-                            TextButton(onClick = { showModels = false }) { Text("Back") }
+                        when {
+                            showModels || showDownloads -> {
+                                TextButton(onClick = {
+                                    showModels = false
+                                    showDownloads = false
+                                }) { Text("Back") }
+                            }
+                            else -> {
+                                TextButton(onClick = { showModels = true }) { Text("Models") }
+                                TextButton(onClick = {
+                                    showDownloads = true
+                                }) { Text("Downloaded") }
+                            }
                         }
                     }
                 )
             }
         ) { inner ->
-            if (showModels) {
-                ModelSelectorScreen(vm = vm, appContext = context.applicationContext)
-            } else {
-                MainMicScreen(
-                    ui = ui,
-                    onStart = {
-                        if (hasMicPermission.value) vm.startListening(context.applicationContext)
-                        else requestMicPermission.launch(micPermission)
-                    },
-                    onStop = { vm.stopListening() },
-                    onAppendSample = { vm.appendTranscript("User: Hello Friday") },
-                    onShowError = { vm.showError("Example error from pipeline") },
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(inner)
-                )
+            when {
+                showModels -> {
+                    ModelSelectorScreen(vm = vm, appContext = context.applicationContext)
+                }
+                showDownloads -> {
+                    DownloadedModelsScreen(vm = vm, appContext = context.applicationContext,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(inner))
+                }
+                else -> {
+                    MainMicScreen(
+                        ui = ui,
+                        onStart = {
+                            if (hasMicPermission.value) vm.startListening(context.applicationContext)
+                            else requestMicPermission.launch(micPermission)
+                        },
+                        onStop = { vm.stopListening() },
+                        onAppendSample = { vm.appendTranscript("User: Hello Friday") },
+                        onShowError = { vm.showError("Example error from pipeline") },
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(inner)
+                    )
+                }
             }
         }
 
