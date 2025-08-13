@@ -8,14 +8,14 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import androidx.core.view.WindowCompat
 import kotlinx.coroutines.*
 import me.dgol.friday.model.ModelLocator
 import me.dgol.friday.prefs.ModelPrefs
@@ -32,23 +32,23 @@ class FridayAssistantActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        // Transparent activity so only the bottom card shows; background stays visible
+        window.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(android.graphics.Color.TRANSPARENT))
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+
         setContent {
             MaterialTheme {
-                var transcript by remember { mutableStateOf("") }
+                var liveText by remember { mutableStateOf("") }      // <- single line text
                 var preparing by remember { mutableStateOf(false) }
                 var modelMissing by remember { mutableStateOf<String?>(null) }
                 var errorText by remember { mutableStateOf<String?>(null) }
                 var listening by remember { mutableStateOf(false) }
 
-                val hasMicPermission by remember {
-                    mutableStateOf(
-                        ContextCompat.checkSelfPermission(
-                            this, Manifest.permission.RECORD_AUDIO
-                        ) == PackageManager.PERMISSION_GRANTED
-                    )
+                // Re-check permission at render time (keeps it accurate)
+                val hasMicPermission by derivedStateOf {
+                    ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
                 }
 
-                // Permission launcher if needed
                 val reqMic = rememberLauncherForActivityResult(
                     ActivityResultContracts.RequestPermission()
                 ) { granted ->
@@ -66,11 +66,13 @@ class FridayAssistantActivity : ComponentActivity() {
 
                     val lang = ModelPrefs.getSelectedLang(this, ModelManager.defaultLang())
                     preparing = true
-                    transcript = ""
+                    liveText = ""
 
                     scope.launch {
                         val modelDir: File? = try {
-                            withContext(Dispatchers.IO) { ModelLocator.resolveVoskModelDir(this@FridayAssistantActivity, lang) }
+                            withContext(Dispatchers.IO) {
+                                ModelLocator.resolveVoskModelDir(this@FridayAssistantActivity, lang)
+                            }
                         } catch (_: Throwable) { null }
 
                         preparing = false
@@ -87,10 +89,10 @@ class FridayAssistantActivity : ComponentActivity() {
                             appContext = applicationContext,
                             modelDir = modelDir,
                             onPartial = { partial ->
-                                if (engineSeq == mySeq) transcript = appendLine(transcript, "• $partial")
+                                if (engineSeq == mySeq) liveText = partial // <- replace instead of append
                             },
                             onFinal = { final ->
-                                if (engineSeq == mySeq) transcript = appendLine(transcript, final)
+                                if (engineSeq == mySeq) liveText = final   // <- replace instead of append
                             },
                             onError = { t ->
                                 if (engineSeq == mySeq) errorText = t.message ?: "Unknown error"
@@ -111,8 +113,8 @@ class FridayAssistantActivity : ComponentActivity() {
                     engineSeq++
                 }
 
-                AssistantSheet(
-                    transcript = transcript,
+                AssistantBottomCard(
+                    text = liveText,
                     preparing = preparing,
                     listening = listening,
                     modelMissing = modelMissing,
@@ -135,8 +137,8 @@ class FridayAssistantActivity : ComponentActivity() {
 }
 
 @Composable
-private fun AssistantSheet(
-    transcript: String,
+private fun AssistantBottomCard(
+    text: String,
     preparing: Boolean,
     listening: Boolean,
     modelMissing: String?,
@@ -162,15 +164,17 @@ private fun AssistantSheet(
                     modelMissing != null -> Text(modelMissing)
                     else -> {
                         if (!errorText.isNullOrBlank()) Text("⚠️ $errorText")
-                        if (transcript.isBlank()) {
-                            Text(if (listening) "Listening…" else "Tap start to begin.")
+                        val display = if (text.isBlank()) {
+                            if (listening) "Listening…" else "Tap start to begin."
                         } else {
-                            Text(
-                                transcript,
-                                Modifier.fillMaxWidth().heightIn(min = 80.dp, max = 220.dp)
-                                    .verticalScroll(rememberScrollState())
-                            )
+                            text
                         }
+                        // Single updating line (ellipsizes if long)
+                        Text(
+                            display,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
                     }
                 }
 
@@ -186,6 +190,3 @@ private fun AssistantSheet(
         }
     }
 }
-
-private fun appendLine(existing: String, new: String) =
-    if (existing.isBlank()) new else "$existing\n$new"
