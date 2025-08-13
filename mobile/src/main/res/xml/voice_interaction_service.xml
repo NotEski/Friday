@@ -3,8 +3,10 @@
 <!-- File: app/src/main/res/xml/voice_interaction_service.xml -->
 <voice-interaction-service
     xmlns:android="http://schemas.android.com/apk/res/android"
-    android:sessionService="me.dgol.friday.voice.FridayVoiceInteractionService"
-    android:recognitionService="me.dgol.friday.voice.FridayRecognitionService"
+    android:sessionService="me.dgol.friday.assistant.FridayVoiceInteractionService"
+    android:recognitionService="me.dgol.friday.assistant.FridayRecognitionService"
     android:settingsActivity="me.dgol.friday.SettingsActivity"
     android:supportsAssist="true"
     android:supportsLaunchVoiceAssistFromKeyguard="true" />
+
+    <!-- android:sessionService="me.dgol.friday.assistant.FridayVoiceInteractionSessionService" -->

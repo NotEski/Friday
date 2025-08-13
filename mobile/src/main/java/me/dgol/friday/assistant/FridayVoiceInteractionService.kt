@@ -21,6 +21,9 @@ class FridayVoiceInteractionService : VoiceInteractionService() {
         showSession(args, VoiceInteractionSession.SHOW_WITH_ASSIST)
     }
 
+    /** User long-presses assistant gesture while UNLOCKED. */
+
+
     override fun onReady() {
         super.onReady()
         // Service is ready to handle sessions.
