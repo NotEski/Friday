@@ -21,139 +21,195 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
+import kotlinx.coroutines.launch
+
+private enum class NavDest { Home, Models, Downloads, Settings }
 
 @Composable
 fun FridayApp(fromAssistInitial: Boolean) {
     val vm: FridayViewModel = viewModel()
     val ui by vm.ui.collectAsState()
     val context = LocalContext.current
+    val appCtx = context.applicationContext
 
     // Ensure view model has initial state (selected model + registry)
-    LaunchedEffect(Unit) { vm.init(context.applicationContext) }
+    LaunchedEffect(Unit) { vm.init(appCtx) }
 
-    var showModels by remember { mutableStateOf(false) }
-    var showDownloads by remember { mutableStateOf(false) }
+    // Navigation drawer
+    val drawerState = rememberDrawerState(DrawerValue.Closed)
+    val scope = rememberCoroutineScope()
+    var current by remember { mutableStateOf(NavDest.Home) }
 
+    // Permissions
     val micPermission = Manifest.permission.RECORD_AUDIO
     val hasMicPermission = remember {
         derivedStateOf {
             ContextCompat.checkSelfPermission(context, micPermission) == PackageManager.PERMISSION_GRANTED
         }
     }
-
     val requestMicPermission = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
     ) { granted ->
-        if (granted) vm.startListening(context.applicationContext) else vm.onPermissionDenied()
+        if (granted) vm.startListening(appCtx) else vm.onPermissionDenied()
     }
 
     // Auto-start if launched from assistant
     LaunchedEffect(fromAssistInitial) {
         if (fromAssistInitial) {
-            if (hasMicPermission.value) vm.startListening(context.applicationContext)
+            if (hasMicPermission.value) vm.startListening(appCtx)
             else requestMicPermission.launch(micPermission)
         }
     }
 
-    // Refresh downloads when entering the screen
-    LaunchedEffect(showDownloads) {
-        if (showDownloads) vm.refreshDownloads(context.applicationContext)
+    // Refresh downloads when navigating to Downloads
+    LaunchedEffect(current) {
+        if (current == NavDest.Downloads) vm.refreshDownloads(appCtx)
+    }
+
+    val title = when (current) {
+        NavDest.Home -> "Friday"
+        NavDest.Models -> "Friday — Models"
+        NavDest.Downloads -> "Friday — Downloaded"
+        NavDest.Settings -> "Friday — Settings"
     }
 
     MaterialTheme {
-        Scaffold(
-            topBar = {
-                CenterAlignedTopAppBar(
-                    title = {
-                        Text(
-                            when {
-                                showModels -> "Friday — Models"
-                                showDownloads -> "Friday — Downloaded"
-                                else -> "Friday"
-                            }
-                        )
-                    },
-                    actions = {
-                        when {
-                            showModels || showDownloads -> {
-                                TextButton(onClick = {
-                                    showModels = false
-                                    showDownloads = false
-                                }) { Text("Back") }
-                            }
-                            else -> {
-                                TextButton(onClick = { showModels = true }) { Text("Models") }
-                                TextButton(onClick = {
-                                    showDownloads = true
-                                }) { Text("Downloaded") }
+        ModalNavigationDrawer(
+            drawerState = drawerState,
+            drawerContent = {
+                ModalDrawerSheet {
+                    Spacer(Modifier.height(12.dp))
+                    Text(
+                        "Friday",
+                        style = MaterialTheme.typography.titleLarge,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                    )
+                    NavigationDrawerItem(
+                        label = { Text("Home") },
+                        selected = current == NavDest.Home,
+                        onClick = {
+                            current = NavDest.Home
+                            scope.launch { drawerState.close() }
+                        }
+                    )
+                    NavigationDrawerItem(
+                        label = { Text("Models Downloader") },
+                        selected = current == NavDest.Models,
+                        onClick = {
+                            current = NavDest.Models
+                            scope.launch { drawerState.close() }
+                        }
+                    )
+                    NavigationDrawerItem(
+                        label = { Text("Downloaded Models") },
+                        selected = current == NavDest.Downloads,
+                        onClick = {
+                            current = NavDest.Downloads
+                            scope.launch { drawerState.close() }
+                        }
+                    )
+                    NavigationDrawerItem(
+                        label = { Text("Settings") },
+                        selected = current == NavDest.Settings,
+                        onClick = {
+                            current = NavDest.Settings
+                            scope.launch { drawerState.close() }
+                        }
+                    )
+                    Spacer(Modifier.height(8.dp))
+                }
+            }
+        ) {
+            Scaffold(
+                topBar = {
+                    CenterAlignedTopAppBar(
+                        title = { Text(title) },
+                        navigationIcon = {
+                            // Minimal hamburger without icon deps
+                            IconButton(onClick = { scope.launch { drawerState.open() } }) {
+                                Text("☰")
                             }
                         }
+                    )
+                }
+            ) { inner ->
+                when (current) {
+                    NavDest.Models -> {
+                        ModelSelectorScreen(
+                            vm = vm,
+                            appContext = appCtx,
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(inner)
+                        )
+                    }
+                    NavDest.Downloads -> {
+                        DownloadedModelsScreen(
+                            vm = vm,
+                            appContext = appCtx,
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(inner)
+                        )
+                    }
+                    NavDest.Settings -> {
+                        SettingsScreen(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(inner)
+                        )
+                    }
+                    NavDest.Home -> {
+                        MainMicScreen(
+                            ui = ui,
+                            onStart = {
+                                if (hasMicPermission.value) vm.startListening(appCtx)
+                                else requestMicPermission.launch(micPermission)
+                            },
+                            onStop = { vm.stopListening() },
+                            onAppendSample = { vm.appendTranscript("User: Hello Friday") },
+                            onShowError = { vm.showError("Example error from pipeline") },
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(inner)
+                        )
+                    }
+                }
+            }
+
+            // ===== Compose Dialogs =====
+
+            if (ui.showPermissionRationale) {
+                AlertDialog(
+                    onDismissRequest = { vm.dismissPermissionRationale() },
+                    title = { Text("Microphone permission") },
+                    text = { Text("Friday needs microphone access to listen. You can grant it in Settings.") },
+                    confirmButton = {
+                        TextButton(onClick = {
+                            vm.dismissPermissionRationale()
+                            val uri = Uri.fromParts("package", context.packageName, null)
+                            context.startActivity(
+                                Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, uri)
+                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            )
+                        }) { Text("Open Settings") }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { vm.dismissPermissionRationale() }) { Text("Cancel") }
                     }
                 )
             }
-        ) { inner ->
-            when {
-                showModels -> {
-                    ModelSelectorScreen(vm = vm, appContext = context.applicationContext)
-                }
-                showDownloads -> {
-                    DownloadedModelsScreen(vm = vm, appContext = context.applicationContext,
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(inner))
-                }
-                else -> {
-                    MainMicScreen(
-                        ui = ui,
-                        onStart = {
-                            if (hasMicPermission.value) vm.startListening(context.applicationContext)
-                            else requestMicPermission.launch(micPermission)
-                        },
-                        onStop = { vm.stopListening() },
-                        onAppendSample = { vm.appendTranscript("User: Hello Friday") },
-                        onShowError = { vm.showError("Example error from pipeline") },
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(inner)
-                    )
-                }
+
+            ui.errorMessage?.let { msg ->
+                AlertDialog(
+                    onDismissRequest = { vm.dismissError() },
+                    title = { Text("Something went wrong") },
+                    text = { Text(msg) },
+                    confirmButton = {
+                        TextButton(onClick = { vm.dismissError() }) { Text("OK") }
+                    }
+                )
             }
-        }
-
-        // ===== Compose Dialogs =====
-
-        if (ui.showPermissionRationale) {
-            AlertDialog(
-                onDismissRequest = { vm.dismissPermissionRationale() },
-                title = { Text("Microphone permission") },
-                text = {
-                    Text("Friday needs microphone access to listen. You can grant it in Settings.")
-                },
-                confirmButton = {
-                    TextButton(onClick = {
-                        vm.dismissPermissionRationale()
-                        val uri = Uri.fromParts("package", context.packageName, null)
-                        context.startActivity(
-                            Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, uri)
-                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                        )
-                    }) { Text("Open Settings") }
-                },
-                dismissButton = {
-                    TextButton(onClick = { vm.dismissPermissionRationale() }) { Text("Cancel") }
-                }
-            )
-        }
-
-        ui.errorMessage?.let { msg ->
-            AlertDialog(
-                onDismissRequest = { vm.dismissError() },
-                title = { Text("Something went wrong") },
-                text = { Text(msg) },
-                confirmButton = {
-                    TextButton(onClick = { vm.dismissError() }) { Text("OK") }
-                }
-            )
         }
     }
 }

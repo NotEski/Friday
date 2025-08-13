@@ -16,7 +16,8 @@ import androidx.compose.ui.unit.dp
 @Composable
 fun ModelSelectorScreen(
     vm: FridayViewModel,
-    appContext: Context
+    appContext: Context,
+    modifier: Modifier = Modifier // ✅ accept external padding from Scaffold
 ) {
     val ui by vm.ui.collectAsState()
 
@@ -32,7 +33,7 @@ fun ModelSelectorScreen(
     val families = vm.familiesForDisplay(appContext)
 
     Column(
-        modifier = Modifier
+        modifier = modifier // ✅ use Scaffold padding here
             .fillMaxSize()
             .padding(16.dp)
             .verticalScroll(rememberScrollState()),
