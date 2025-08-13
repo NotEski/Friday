@@ -1,3 +1,10 @@
 <resources>
     <string name="app_name">Friday</string>
+    <string name="mic_permission_title">Microphone permission</string>
+    <string name="mic_permission_body">Friday needs microphone access to listen. You can grant it in Settings.</string>
+    <string name="open_settings">Open Settings</string>
+    <string name="cancel">Cancel</string>
+    <string name="something_went_wrong">Something went wrong</string>
+    <string name="ok">OK</string>
+
 </resources>
