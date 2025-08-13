@@ -1,59 +1,69 @@
 package me.dgol.friday.assistant
 
-import android.content.Context
+import android.Manifest
+import android.content.pm.PackageManager
 import android.os.Bundle
 import android.service.voice.VoiceInteractionSession
 import android.view.View
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.tween
-import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.ComposeView
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
+import kotlinx.coroutines.*
+import me.dgol.friday.model.ModelLocator
+import me.dgol.friday.prefs.ModelPrefs
+import me.dgol.friday.shared.stt.ModelManager
+import me.dgol.friday.stt.VoskEngine
+import java.io.File
 
 /**
- * Lightweight assistant overlay shown when Friday is invoked via the system Assist gesture.
- * Appears over other apps inside the VoiceInteractionSession window.
+ * Minimal assistant overlay: Start/Stop + live transcript.
+ * Appears when the user invokes Friday via the system assistant gesture.
  */
 class FridayVoiceInteractionSession(
-    context: Context
-) : VoiceInteractionSession(context) {
+    private val appCtx: android.content.Context
+) : VoiceInteractionSession(appCtx) {
 
-    private var isShowing by mutableStateOf(false)
+    private var engine: VoskEngine? = null
+    private var sessionSeq = 0
+
+    // Coroutine scope that lives with this session window
+    private val sessionScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
     override fun onCreate() {
         super.onCreate()
-        // Make sure the system-managed session window is used.
+        // Ensure the system gives us a visible UI surface.
         setUiEnabled(true)
     }
 
+    override fun onDestroy() {
+        super.onDestroy()
+        sessionScope.cancel() // avoid leaks
+    }
 
     override fun onCreateContentView(): View {
-        return ComposeView(context).apply {
+        return ComposeView(appCtx).apply {
             setContent {
                 MaterialTheme {
-                    AssistOverlay(
-                        visible = isShowing,
-                        onClose = { hide() }
+                    OverlayUi(
+                        isMicGranted = hasMicPermission(),
+                        isListening = engine != null,
+                        isPreparing = isPreparing,
+                        transcriptProvider = { currentTranscript },
+                        onStart = { startListening() },
+                        onStop = { stopListening() },
+                        onDismiss = { hide() },
+                        modelMissing = modelMissingMsg
                     )
                 }
             }
@@ -62,139 +72,162 @@ class FridayVoiceInteractionSession(
 
     override fun onShow(args: Bundle?, showFlags: Int) {
         super.onShow(args, showFlags)
-        isShowing = true
-        // Hook STT warm-up here if desired.
+        // No auto-start; user taps Start to begin.
     }
 
     override fun onHide() {
         super.onHide()
-        isShowing = false
+        stopListening()
     }
 
-    override fun onCloseSystemDialogs() {
-        super.onCloseSystemDialogs()
-        hide()
+    // -------- STT handling (local to the session) --------
+
+    private var currentTranscript by mutableStateOf("")
+    private var modelMissingMsg by mutableStateOf<String?>(null)
+    private var isPreparing by mutableStateOf(false)
+
+    private fun hasMicPermission(): Boolean =
+        ContextCompat.checkSelfPermission(appCtx, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+
+    private fun startListening() {
+        if (engine != null || isPreparing) return
+        if (!hasMicPermission()) {
+            currentTranscript = "Microphone permission required. Open the Friday app to grant access."
+            return
+        }
+
+        val lang = ModelPrefs.getSelectedLang(appCtx, ModelManager.defaultLang())
+        isPreparing = true
+        currentTranscript = ""
+
+        sessionScope.launch {
+            val modelDir: File? = try {
+                // suspend lookup (may touch disk)
+                ModelLocator.resolveVoskModelDir(appCtx, lang)
+            } catch (t: Throwable) {
+                null
+            }
+
+            isPreparing = false
+
+            if (modelDir == null || !modelDir.exists()) {
+                modelMissingMsg = "Model not set up for '$lang'. Open Friday → Models to download/select one."
+                return@launch
+            }
+
+            modelMissingMsg = null
+
+            val mySeq = ++sessionSeq
+            engine = VoskEngine(
+                appContext = appCtx,
+                modelDir = modelDir,
+                onPartial = { partial ->
+                    if (sessionSeq == mySeq) {
+                        currentTranscript = buildTranscript(currentTranscript, "• $partial")
+                    }
+                },
+                onFinal = { final ->
+                    if (sessionSeq == mySeq) {
+                        currentTranscript = buildTranscript(currentTranscript, final)
+                    }
+                },
+                onError = { t ->
+                    if (sessionSeq == mySeq) {
+                        currentTranscript = buildTranscript(currentTranscript, "⚠️ ${t.message ?: "Unknown error"}")
+                    }
+                }
+            ).also { it.start() }
+        }
     }
+
+    private fun stopListening() {
+        val e = engine ?: return
+        try { e.stop() } catch (_: Throwable) {}
+        try { e.release() } catch (_: Throwable) {}
+        engine = null
+    }
+
+    private fun buildTranscript(existing: String, newLine: String): String =
+        if (existing.isBlank()) newLine else "$existing\n$newLine"
 }
 
 @Composable
-private fun AssistOverlay(
-    visible: Boolean,
-    onClose: () -> Unit
+private fun OverlayUi(
+    isMicGranted: Boolean,
+    isListening: Boolean,
+    isPreparing: Boolean,
+    transcriptProvider: () -> String,
+    onStart: () -> Unit,
+    onStop: () -> Unit,
+    onDismiss: () -> Unit,
+    modelMissing: String?
 ) {
-    val targetHeight = 220.dp
-    val heightPx by animateFloatAsState(
-        targetValue = if (visible) targetHeight.value else 0f,
-        animationSpec = tween(durationMillis = 350, easing = FastOutSlowInEasing),
-        label = "overlayHeight"
-    )
-
-    Box(modifier = Modifier.fillMaxSize()) {
-        AnimatedVisibility(visible = heightPx > 1f) {
-            Box(
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp)
+    ) {
+        Card(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth(),
+            elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
+        ) {
+            Column(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .height(heightPx.dp)
-                    .align(Alignment.BottomCenter)
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                SemicirclePanel(
-                    modifier = Modifier.fillMaxSize(),
-                    background = MaterialTheme.colorScheme.surface,
-                    accent = MaterialTheme.colorScheme.primary
-                )
+                Text("Friday", style = MaterialTheme.typography.titleLarge)
 
-                Column(
-                    modifier = Modifier
-                        .align(Alignment.Center)
-                        .padding(bottom = 16.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                when {
+                    !isMicGranted -> {
+                        Text("Microphone permission required. Open the Friday app to grant it in Settings.")
+                    }
+                    modelMissing != null -> {
+                        Text(modelMissing)
+                    }
+                    isPreparing -> {
+                        Text("Preparing model…")
+                    }
+                    else -> {
+                        val transcript = transcriptProvider()
+                        if (transcript.isBlank()) {
+                            Text(if (isListening) "Listening…" else "Tap start to begin.")
+                        } else {
+                            Text(
+                                transcript,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .heightIn(min = 80.dp, max = 220.dp)
+                                    .verticalScroll(rememberScrollState())
+                            )
+                        }
+                    }
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    MicPulse(size = 56.dp)
-                    Text("Listening…", style = MaterialTheme.typography.titleMedium)
-                    Spacer(Modifier.height(8.dp))
-                    Button(onClick = onClose) { Text("Dismiss") }
+                    if (isListening) {
+                        Button(
+                            onClick = onStop,
+                            modifier = Modifier.weight(1f)
+                        ) { Text("⏹ Stop") }
+                    } else {
+                        Button(
+                            onClick = onStart,
+                            modifier = Modifier.weight(1f)
+                        ) { Text("🎙 Start voice recognition") }
+                    }
+                    Button(
+                        onClick = onDismiss,
+                        modifier = Modifier.weight(1f)
+                    ) { Text("Close") }
                 }
             }
         }
-    }
-}
-
-/**
- * Draw a semi-circle popping from the bottom of the window.
- */
-@Composable
-private fun SemicirclePanel(
-    modifier: Modifier = Modifier,
-    background: Color,
-    accent: Color
-) {
-    Canvas(modifier = modifier) {
-        val w = size.width
-        val h = size.height
-
-        val radius = (w * 0.65f).coerceAtLeast(h * 0.9f)
-        val left = (w / 2f) - radius
-        val top = h - (radius * 2f)
-        val arcSize = androidx.compose.ui.geometry.Size(radius * 2f, radius * 2f)
-        val topLeft = androidx.compose.ui.geometry.Offset(left, top)
-
-        // Filled hump
-        drawArc(
-            color = background,
-            startAngle = 180f,
-            sweepAngle = 180f,
-            useCenter = true,
-            topLeft = topLeft,
-            size = arcSize
-        )
-
-        // Subtle ring
-        drawArc(
-            color = accent.copy(alpha = 0.06f),
-            startAngle = 180f,
-            sweepAngle = 180f,
-            useCenter = false,
-            topLeft = androidx.compose.ui.geometry.Offset(left + 8f, top + 8f),
-            size = androidx.compose.ui.geometry.Size(arcSize.width - 16f, arcSize.height - 12f),
-            style = Stroke(width = 6f)
-        )
-    }
-}
-
-/** Pulsing mic dot. */
-@Composable
-private fun MicPulse(size: Dp) {
-    val pulse = rememberInfiniteTransition(label = "pulse").animateFloat(
-        initialValue = 0.8f,
-        targetValue = 1.4f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 900, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "scale"
-    )
-
-    Box(
-        modifier = Modifier
-            .size(size)
-            .clip(CircleShape),
-        contentAlignment = Alignment.Center
-    ) {
-        // Outer pulse
-        Box(
-            modifier = Modifier
-                .size(size * pulse.value)
-                .clip(CircleShape)
-                .alpha(0.25f)
-                .background(MaterialTheme.colorScheme.primary)
-        )
-        // Solid inner dot
-        Box(
-            modifier = Modifier
-                .size(size * 0.5f)
-                .clip(CircleShape)
-                .background(MaterialTheme.colorScheme.primary)
-        )
     }
 }

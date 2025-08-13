@@ -269,8 +269,11 @@ class FridayViewModel : ViewModel() {
 
     // --- STT control ---
 
+    private var engineSeq = 0
+
     fun startListening(appContext: Context) {
         if (_ui.value.isListening) return
+        val mySeq = ++engineSeq
 
         val lang = _ui.value.selectedLang
         viewModelScope.launch {
@@ -287,13 +290,19 @@ class FridayViewModel : ViewModel() {
                 appContext = appContext,
                 modelDir = modelDir,
                 onPartial = { partial ->
-                    _ui.update { it.copy(transcript = mergeLines(it.transcript, "• $partial")) }
+                    if (engineSeq == mySeq) {
+                        _ui.update { it.copy(transcript = mergeLines(it.transcript, "• $partial")) }
+                    }
                 },
                 onFinal = { final ->
-                    _ui.update { it.copy(transcript = mergeLines(it.transcript, final)) }
+                    if (engineSeq == mySeq) {
+                        _ui.update { it.copy(transcript = mergeLines(it.transcript, final)) }
+                    }
                 },
                 onError = { t ->
-                    _ui.update { it.copy(isListening = false, isThinking = false, errorMessage = t.message ?: "Unknown error") }
+                    if (engineSeq == mySeq) {
+                        _ui.update { it.copy(isListening = false, isThinking = false, errorMessage = t.message ?: "Unknown error") }
+                    }
                 }
             ).also { it.start() }
 
@@ -302,7 +311,12 @@ class FridayViewModel : ViewModel() {
     }
 
     fun stopListening() {
-        engine?.stop()
+        val e = engine ?: run {
+            _ui.update { it.copy(isListening = false, isThinking = false) }
+            return
+        }
+        try { e.stop() } catch (_: Throwable) {}
+        try { e.release() } catch (_: Throwable) {}
         engine = null
         _ui.update { it.copy(isListening = false, isThinking = false) }
     }
