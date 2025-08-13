@@ -60,13 +60,12 @@
 
         <!-- Optional: direct ACTION_ASSIST handler -->
         <activity
-            android:name="me.dgol.friday.assistant.AssistActivity"
-            android:exported="true"
-            android:excludeFromRecents="true">
-            <intent-filter>
-                <action android:name="android.intent.action.ASSIST" />
-                <category android:name="android.intent.category.DEFAULT" />
-            </intent-filter>
-        </activity>
+            android:name="me.dgol.friday.assistant.FridayAssistantActivity"
+            android:exported="false"
+            android:taskAffinity=""
+            android:excludeFromRecents="true"
+            android:showOnLockScreen="true"
+            android:showWhenLocked="true"
+            android:turnScreenOn="true" />
     </application>
 </manifest>
