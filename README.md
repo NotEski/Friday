@@ -1,6 +1,8 @@
 # Friday — Your Private Voice Assistant (Pre-Alpha)
 <small>Last updated: 13 Aug 2025</small>
+
 ![Status: Pre-Alpha](https://img.shields.io/badge/status-pre--alpha-orange) ![Platform: Android](https://img.shields.io/badge/platform-Android-3DDC84) ![Privacy-first](https://img.shields.io/badge/privacy-first-blue) ![Built with Kotlin](https://img.shields.io/badge/built%20with-Kotlin-7F52FF)
+
 ![Last commit](https://img.shields.io/github/last-commit/NotEski/Friday) ![GitHub stars](https://img.shields.io/github/stars/NotEski/Friday?style=social)
 
 
