@@ -28,6 +28,11 @@ fun FridayApp(fromAssistInitial: Boolean) {
     val ui by vm.ui.collectAsState()
     val context = LocalContext.current
 
+    // Ensure view model has initial state (selected model + list)
+    LaunchedEffect(Unit) { vm.init(context.applicationContext) }
+
+    var showModels by remember { mutableStateOf(false) }
+
     val micPermission = Manifest.permission.RECORD_AUDIO
     val hasMicPermission = remember {
         derivedStateOf {
@@ -38,13 +43,13 @@ fun FridayApp(fromAssistInitial: Boolean) {
     val requestMicPermission = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
     ) { granted ->
-        if (granted) vm.startListening() else vm.onPermissionDenied()
+        if (granted) vm.startListening(context.applicationContext) else vm.onPermissionDenied()
     }
 
     // Auto-start if launched from assistant
     LaunchedEffect(fromAssistInitial) {
         if (fromAssistInitial) {
-            if (hasMicPermission.value) vm.startListening()
+            if (hasMicPermission.value) vm.startListening(context.applicationContext)
             else requestMicPermission.launch(micPermission)
         }
     }
@@ -53,80 +58,37 @@ fun FridayApp(fromAssistInitial: Boolean) {
         Scaffold(
             topBar = {
                 CenterAlignedTopAppBar(
-                    title = { Text("Friday") }
+                    title = { Text(if (showModels) "Friday — Models" else "Friday") },
+                    actions = {
+                        if (!showModels) {
+                            TextButton(onClick = { showModels = true }) { Text("Models") }
+                        } else {
+                            TextButton(onClick = { showModels = false }) { Text("Back") }
+                        }
+                    }
                 )
             }
         ) { inner ->
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(inner)
-                    .padding(16.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                // Transcript area
-                Text(
-                    text = if (ui.transcript.isBlank()) "Transcript will appear here…" else ui.transcript,
+            if (showModels) {
+                ModelSelectorScreen(vm = vm, appContext = context.applicationContext)
+            } else {
+                MainMicScreen(
+                    ui = ui,
+                    onStart = {
+                        if (hasMicPermission.value) vm.startListening(context.applicationContext)
+                        else requestMicPermission.launch(micPermission)
+                    },
+                    onStop = { vm.stopListening() },
+                    onAppendSample = { vm.appendTranscript("User: Hello Friday") },
+                    onShowError = { vm.showError("Example error from pipeline") },
                     modifier = Modifier
-                        .weight(1f)
-                        .fillMaxWidth()
-                        .verticalScroll(rememberScrollState())
-                        .padding(8.dp),
-                    textAlign = TextAlign.Start
+                        .fillMaxSize()
+                        .padding(inner)
                 )
-
-                Spacer(Modifier.height(16.dp))
-
-                // Mic controls
-                if (!ui.isListening) {
-                    Button(
-                        onClick = {
-                            if (hasMicPermission.value) vm.startListening()
-                            else requestMicPermission.launch(micPermission)
-                        },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(56.dp)
-                    ) {
-                        Text("🎙️  Start Listening")
-                    }
-                } else {
-                    Button(
-                        onClick = { vm.stopListening() },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(56.dp)
-                    ) {
-                        Text("⏹  Stop")
-                    }
-
-                    if (ui.isThinking) {
-                        Spacer(Modifier.height(12.dp))
-                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                    }
-                }
-
-                Spacer(Modifier.height(8.dp))
-
-                // Demo buttons (remove once you wire the pipeline)
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    OutlinedButton(
-                        onClick = { vm.appendTranscript("User: Hello Friday") },
-                        modifier = Modifier.weight(1f)
-                    ) { Text("Append sample") }
-
-                    OutlinedButton(
-                        onClick = { vm.showError("Example error from pipeline") },
-                        modifier = Modifier.weight(1f)
-                    ) { Text("Show error") }
-                }
             }
         }
 
-        // ===== Compose Dialogs (safe, lifecycle-aware) =====
+        // ===== Compose Dialogs =====
 
         if (ui.showPermissionRationale) {
             AlertDialog(
@@ -160,6 +122,79 @@ fun FridayApp(fromAssistInitial: Boolean) {
                     TextButton(onClick = { vm.dismissError() }) { Text("OK") }
                 }
             )
+        }
+    }
+}
+
+@Composable
+private fun MainMicScreen(
+    ui: FridayUiState,
+    onStart: () -> Unit,
+    onStop: () -> Unit,
+    onAppendSample: () -> Unit,
+    onShowError: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Column(
+        modifier = modifier
+            .padding(16.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        // Transcript area
+        Text(
+            text = if (ui.transcript.isBlank()) "Transcript will appear here…" else ui.transcript,
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .padding(8.dp),
+            textAlign = TextAlign.Start
+        )
+
+        Spacer(Modifier.height(16.dp))
+
+        // Mic controls
+        if (!ui.isListening) {
+            Button(
+                onClick = onStart,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(56.dp)
+            ) {
+                Text("🎙️  Start Listening")
+            }
+        } else {
+            Button(
+                onClick = onStop,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(56.dp)
+            ) {
+                Text("⏹  Stop")
+            }
+
+            if (ui.isThinking) {
+                Spacer(Modifier.height(12.dp))
+                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+            }
+        }
+
+        Spacer(Modifier.height(8.dp))
+
+        // Demo buttons (optional)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            OutlinedButton(
+                onClick = onAppendSample,
+                modifier = Modifier.weight(1f)
+            ) { Text("Append sample") }
+
+            OutlinedButton(
+                onClick = onShowError,
+                modifier = Modifier.weight(1f)
+            ) { Text("Show error") }
         }
     }
 }
