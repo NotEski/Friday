@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Bundle
 import android.service.voice.VoiceInteractionSession
+import android.util.Log
 import android.view.View
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -26,6 +27,8 @@ import me.dgol.friday.shared.stt.ModelManager
 import me.dgol.friday.stt.VoskEngine
 import java.io.File
 
+private const val TAG = "FridayAssist"
+
 /**
  * Minimal assistant overlay: Start/Stop + live transcript.
  * Appears when the user invokes Friday via the system assistant gesture.
@@ -40,15 +43,23 @@ class FridayVoiceInteractionSession(
     // Coroutine scope that lives with this session window
     private val sessionScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
+    // UI state
+    private var currentTranscript by mutableStateOf("")
+    private var modelMissingMsg by mutableStateOf<String?>(null)
+    private var isPreparing by mutableStateOf(false)
+    private var lastError by mutableStateOf<String?>(null)
+
     override fun onCreate() {
         super.onCreate()
-        // Ensure the system gives us a visible UI surface.
         setUiEnabled(true)
+        Log.d(TAG, "Session created")
     }
 
     override fun onDestroy() {
         super.onDestroy()
-        sessionScope.cancel() // avoid leaks
+        Log.d(TAG, "Session destroyed")
+        sessionScope.cancel()
+        safeCloseEngine()
     }
 
     override fun onCreateContentView(): View {
@@ -63,7 +74,8 @@ class FridayVoiceInteractionSession(
                         onStart = { startListening() },
                         onStop = { stopListening() },
                         onDismiss = { hide() },
-                        modelMissing = modelMissingMsg
+                        modelMissing = modelMissingMsg,
+                        errorText = lastError
                     )
                 }
             }
@@ -72,39 +84,45 @@ class FridayVoiceInteractionSession(
 
     override fun onShow(args: Bundle?, showFlags: Int) {
         super.onShow(args, showFlags)
-        // No auto-start; user taps Start to begin.
+        Log.d(TAG, "onShow flags=$showFlags args=$args")
+        // user will tap Start
     }
 
     override fun onHide() {
         super.onHide()
+        Log.d(TAG, "onHide")
         stopListening()
     }
 
     // -------- STT handling (local to the session) --------
 
-    private var currentTranscript by mutableStateOf("")
-    private var modelMissingMsg by mutableStateOf<String?>(null)
-    private var isPreparing by mutableStateOf(false)
-
     private fun hasMicPermission(): Boolean =
         ContextCompat.checkSelfPermission(appCtx, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
 
     private fun startListening() {
-        if (engine != null || isPreparing) return
+        if (engine != null || isPreparing) {
+            Log.d(TAG, "startListening skipped (engine=${engine != null}, preparing=$isPreparing)")
+            return
+        }
+        lastError = null
         if (!hasMicPermission()) {
             currentTranscript = "Microphone permission required. Open the Friday app to grant access."
+            Log.w(TAG, "Mic permission missing")
             return
         }
 
         val lang = ModelPrefs.getSelectedLang(appCtx, ModelManager.defaultLang())
         isPreparing = true
         currentTranscript = ""
+        Log.d(TAG, "Resolving model for lang=$lang ...")
 
         sessionScope.launch {
             val modelDir: File? = try {
-                // suspend lookup (may touch disk)
-                ModelLocator.resolveVoskModelDir(appCtx, lang)
+                withContext(Dispatchers.IO) {
+                    ModelLocator.resolveVoskModelDir(appCtx, lang)
+                }
             } catch (t: Throwable) {
+                Log.e(TAG, "resolveVoskModelDir failed", t)
                 null
             }
 
@@ -112,39 +130,62 @@ class FridayVoiceInteractionSession(
 
             if (modelDir == null || !modelDir.exists()) {
                 modelMissingMsg = "Model not set up for '$lang'. Open Friday → Models to download/select one."
+                Log.w(TAG, "Model missing for $lang")
                 return@launch
             }
 
             modelMissingMsg = null
-
             val mySeq = ++sessionSeq
-            engine = VoskEngine(
-                appContext = appCtx,
-                modelDir = modelDir,
-                onPartial = { partial ->
-                    if (sessionSeq == mySeq) {
-                        currentTranscript = buildTranscript(currentTranscript, "• $partial")
+
+            Log.d(TAG, "Starting VoskEngine with modelDir=${modelDir.absolutePath}")
+            val started = runCatching {
+                engine = VoskEngine(
+                    appContext = appCtx,
+                    modelDir = modelDir,
+                    onPartial = { partial ->
+                        if (sessionSeq == mySeq) {
+                            currentTranscript = buildTranscript(currentTranscript, "• $partial")
+                        }
+                    },
+                    onFinal = { final ->
+                        if (sessionSeq == mySeq) {
+                            currentTranscript = buildTranscript(currentTranscript, final)
+                        }
+                    },
+                    onError = { t ->
+                        if (sessionSeq == mySeq) {
+                            val msg = t.message ?: "Unknown error"
+                            lastError = msg
+                            currentTranscript = buildTranscript(currentTranscript, "⚠️ $msg")
+                            Log.e(TAG, "Engine error: $msg", t)
+                        }
                     }
-                },
-                onFinal = { final ->
-                    if (sessionSeq == mySeq) {
-                        currentTranscript = buildTranscript(currentTranscript, final)
-                    }
-                },
-                onError = { t ->
-                    if (sessionSeq == mySeq) {
-                        currentTranscript = buildTranscript(currentTranscript, "⚠️ ${t.message ?: "Unknown error"}")
-                    }
-                }
-            ).also { it.start() }
+                ).also { it.start() }
+                true
+            }.onFailure {
+                lastError = it.message ?: it::class.java.simpleName
+                Log.e(TAG, "Engine start failed", it)
+            }.getOrDefault(false)
+
+            if (!started) {
+                // make sure engine is null if start failed
+                safeCloseEngine()
+            }
         }
     }
 
     private fun stopListening() {
+        Log.d(TAG, "stopListening()")
+        safeCloseEngine()
+    }
+
+    private fun safeCloseEngine() {
         val e = engine ?: return
-        try { e.stop() } catch (_: Throwable) {}
-        try { e.release() } catch (_: Throwable) {}
         engine = null
+        // Bump sequence so late callbacks are ignored
+        sessionSeq++
+        runCatching { e.stop() }.onFailure { Log.w(TAG, "e.stop() failed", it) }
+        runCatching { e.release() }.onFailure { Log.w(TAG, "e.release() failed", it) }
     }
 
     private fun buildTranscript(existing: String, newLine: String): String =
@@ -160,7 +201,8 @@ private fun OverlayUi(
     onStart: () -> Unit,
     onStop: () -> Unit,
     onDismiss: () -> Unit,
-    modelMissing: String?
+    modelMissing: String?,
+    errorText: String?
 ) {
     Box(
         modifier = Modifier
@@ -193,6 +235,9 @@ private fun OverlayUi(
                     }
                     else -> {
                         val transcript = transcriptProvider()
+                        if (!errorText.isNullOrBlank()) {
+                            Text("⚠️ $errorText")
+                        }
                         if (transcript.isBlank()) {
                             Text(if (isListening) "Listening…" else "Tap start to begin.")
                         } else {
