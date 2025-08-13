@@ -40,6 +40,13 @@ class FridayVoiceInteractionSession(
 
     private var isShowing by mutableStateOf(false)
 
+    override fun onCreate() {
+        super.onCreate()
+        // Make sure the system-managed session window is used.
+        setUiEnabled(true)
+    }
+
+
     override fun onCreateContentView(): View {
         return ComposeView(context).apply {
             setContent {

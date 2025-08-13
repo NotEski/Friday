@@ -2,6 +2,7 @@ package me.dgol.friday.assistant
 
 import android.os.Bundle
 import android.service.voice.VoiceInteractionService
+import android.service.voice.VoiceInteractionSession
 
 /**
  * Bound by the system when the user invokes the assistant.
@@ -14,8 +15,10 @@ class FridayVoiceInteractionService : VoiceInteractionService() {
      * Most logic lives in FridayVoiceInteractionSession.
      */
     override fun onLaunchVoiceAssistFromKeyguard() {
-        // Let the framework start our session service and session; nothing else required here.
-        super.onLaunchVoiceAssistFromKeyguard()
+        // Ask the system to start and show our VoiceInteractionSession UI.
+        val args = Bundle().apply { putBoolean("from_keyguard", true) }
+        // Include WITH_ASSIST so onHandleAssist(AssistState) can fire if allowed by user.
+        showSession(args, VoiceInteractionSession.SHOW_WITH_ASSIST)
     }
 
     override fun onReady() {
