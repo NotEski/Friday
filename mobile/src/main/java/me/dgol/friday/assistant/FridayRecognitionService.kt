@@ -1,4 +1,4 @@
-package me.dgol.friday.voice
+package me.dgol.friday.assistant
 
 import android.os.Bundle
 import android.content.Intent
@@ -7,7 +7,6 @@ import android.speech.SpeechRecognizer
 import kotlinx.coroutines.*
 import me.dgol.friday.shared.stt.ModelManager
 import org.json.JSONObject
-import org.vosk.Model
 import org.vosk.Recognizer
 import org.vosk.android.RecognitionListener
 import org.vosk.android.SpeechService

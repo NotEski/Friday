@@ -24,6 +24,14 @@ import android.util.Log
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        val launchedFromAssist = intent?.getBooleanExtra("from_assist", false) == true
+        if (launchedFromAssist) {
+            // TODO: replace with your existing start-listening / open-mic routine.
+            // For example:
+            // viewModel.startVoiceSession(source = "assistant")
+
+        }
+
         enableEdgeToEdge()
         setContent {
             FridayTheme {

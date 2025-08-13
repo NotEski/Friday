@@ -1,4 +1,4 @@
-package me.dgol.friday.voice
+package me.dgol.friday.assistant
 
 import android.content.Context
 import android.service.voice.VoiceInteractionSession
