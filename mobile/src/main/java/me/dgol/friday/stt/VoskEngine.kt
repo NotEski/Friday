@@ -1,124 +1,140 @@
 package me.dgol.friday.stt
 
-import android.content.Context
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
-import kotlinx.coroutines.*
+import android.util.Log
 import org.json.JSONObject
-import java.io.File
-import kotlin.math.max
 import org.vosk.Model
 import org.vosk.Recognizer
+import java.io.File
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 
 /**
- * Minimal Vosk wrapper:
- * - Loads a model from a directory
- * - Captures 16kHz PCM mono via AudioRecord
- * - Emits partial and final text
+ * Minimal, robust Vosk wrapper.
+ * - Runs capture + recognition on a single background thread.
+ * - Safe stop(): joins the thread before freeing native objects.
+ * - Never throws to callers; all errors are sent to onError.
  */
 class VoskEngine(
-    private val appContext: Context,
+    private val appContext: android.content.Context,
     private val modelDir: File,
     private val onPartial: (String) -> Unit,
     private val onFinal: (String) -> Unit,
     private val onError: (Throwable) -> Unit
 ) {
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    companion object { private const val TAG = "VoskEngine" }
 
-    @Volatile private var audioRecord: AudioRecord? = null
-    @Volatile private var recognizer: Recognizer? = null
-    @Volatile private var model: Model? = null
-    @Volatile private var running = false
-
-    fun isRunning(): Boolean = running
+    private val running = AtomicBoolean(false)
+    private val workerRef = AtomicReference<Thread?>()
+    private val sampleRate = 16000 // Vosk models expect 16k
 
     fun start() {
-        if (running) return
-        running = true
+        if (!running.compareAndSet(false, true)) {
+            Log.w(TAG, "start() ignored; already running")
+            return
+        }
 
-        scope.launch {
+        val worker = Thread({
+            var model: Model? = null
+            var rec: Recognizer? = null
+            var ar: AudioRecord? = null
             try {
-                val sampleRate = 16000 // align with your model
+                // 1) Init model + recognizer
                 model = Model(modelDir.absolutePath)
-                recognizer = Recognizer(model, sampleRate.toFloat())
+                rec = Recognizer(model, sampleRate.toFloat())
 
+                // 2) Create AudioRecord
                 val minBuf = AudioRecord.getMinBufferSize(
                     sampleRate,
                     AudioFormat.CHANNEL_IN_MONO,
                     AudioFormat.ENCODING_PCM_16BIT
                 )
-                val bufferSize = max(minBuf, 4096)
+                if (minBuf <= 0) throw IllegalStateException("Invalid buffer size: $minBuf")
 
-                // VOICE_RECOGNITION reduces OS audio processing versus MIC on many devices.
-                val record = AudioRecord(
+                ar = AudioRecord(
                     MediaRecorder.AudioSource.VOICE_RECOGNITION,
                     sampleRate,
                     AudioFormat.CHANNEL_IN_MONO,
                     AudioFormat.ENCODING_PCM_16BIT,
-                    bufferSize
+                    (minBuf * 2).coerceAtLeast(8192)
                 )
-                audioRecord = record
-
-                if (record.state != AudioRecord.STATE_INITIALIZED) {
-                    throw IllegalStateException("AudioRecord not initialized (buffer=$bufferSize)")
+                if (ar.state != AudioRecord.STATE_INITIALIZED) {
+                    throw IllegalStateException("AudioRecord not initialized (state=${ar.state})")
                 }
 
-                record.startRecording()
+                // 3) Start capture loop
+                val buffer = ByteArray(minBuf.coerceAtLeast(4096))
+                ar.startRecording()
+                Log.d(TAG, "Recording started")
 
-                val buf = ByteArray(bufferSize)
-                while (running && record.recordingState == AudioRecord.RECORDSTATE_RECORDING) {
-                    val n = record.read(buf, 0, buf.size)
+                while (running.get()) {
+                    val n = ar.read(buffer, 0, buffer.size)
                     if (n <= 0) continue
 
-                    val rec = recognizer ?: break
-                    val accepted = rec.acceptWaveForm(buf, n)
-                    val json = if (accepted) rec.result else rec.partialResult
-                    parseAndDispatch(json, accepted)
+                    // Feed to recognizer
+                    try {
+                        val json = if (rec.acceptWaveForm(buffer, n)) rec.result else rec.partialResult
+                        handleResultJson(json)
+                    } catch (t: Throwable) {
+                        // Catch JSON or recognizer errors without bailing the thread
+                        Log.e(TAG, "Recognizer error", t)
+                        onError(t)
+                    }
                 }
 
-                stopInternal()
+                // 4) Final result after loop ends
+                try {
+                    val finalJson = rec.finalResult
+                    handleResultJson(finalJson, final = true)
+                } catch (t: Throwable) {
+                    Log.w(TAG, "finalResult failed", t)
+                }
             } catch (t: Throwable) {
+                Log.e(TAG, "Engine thread failed", t)
                 onError(t)
-                stopInternal()
+            } finally {
+                // Always stop & free in this order on the same thread
+                try { ar?.stop() } catch (_: Throwable) {}
+                try { ar?.release() } catch (_: Throwable) {}
+                try { rec?.close() } catch (_: Throwable) {}
+                try { model?.close() } catch (_: Throwable) {}
+                Log.d(TAG, "Recording stopped and resources released")
+                running.set(false)
+                workerRef.set(null)
             }
-        }
+        }, "VoskEngine")
+
+        workerRef.set(worker)
+        worker.start()
     }
 
     fun stop() {
-        running = false
-        scope.launch { stopInternal() }
+        if (!running.compareAndSet(true, false)) return
+        // Wait briefly for the thread to release native resources
+        workerRef.getAndSet(null)?.join(1500)
     }
 
     fun release() {
-        running = false
-        scope.cancel()
-        stopInternal()
+        // Same as stop; keep for API parity
+        stop()
     }
 
-    private fun stopInternal() {
+    private fun handleResultJson(json: String, final: Boolean = false) {
+        // Typical JSON:
+        //  partial: {"partial":"hello wor"}
+        //  final:   {"text":"hello world"}
         try {
-            audioRecord?.apply {
-                if (recordingState == AudioRecord.RECORDSTATE_RECORDING) stop()
-                release()
+            val o = JSONObject(json)
+            val partial = o.optString("partial", null)
+            val text = o.optString("text", null)
+            when {
+                !text.isNullOrBlank() -> onFinal(text)
+                !partial.isNullOrBlank() && !final -> onPartial(partial)
             }
-        } catch (_: Throwable) { /* no-op */ }
-        finally { audioRecord = null }
-
-        try { recognizer?.close() } catch (_: Throwable) {}
-        finally { recognizer = null }
-
-        try { model?.close() } catch (_: Throwable) {}
-        finally { model = null }
-    }
-
-    private fun parseAndDispatch(json: String?, isFinal: Boolean) {
-        if (json.isNullOrBlank()) return
-        val obj = runCatching { JSONObject(json) }.getOrNull() ?: return
-        val key = if (isFinal) "text" else "partial"
-        val text = obj.optString(key, "")
-        if (text.isBlank()) return
-
-        if (isFinal) onFinal(text) else onPartial(text)
+        } catch (t: Throwable) {
+            Log.w(TAG, "Bad JSON: $json", t)
+        }
     }
 }
