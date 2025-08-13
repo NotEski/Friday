@@ -31,8 +31,9 @@ class FridayVoiceInteractionSession(context: Context) : VoiceInteractionSession(
         finish()
     }
 
-    // --- Legacy overloads (deprecated but still present on newer SDKs) ---
-    @Suppress("DEPRECATION")
+    // --- Legacy overloads (deprecated on the platform) ---
+    @Deprecated("Platform API is deprecated. Use onHandleAssist(AssistState) instead.")
+    @Suppress("DEPRECATION", "OVERRIDE_DEPRECATION")
     override fun onHandleAssist(
         data: Bundle?,
         structure: AssistStructure?,
@@ -42,7 +43,8 @@ class FridayVoiceInteractionSession(context: Context) : VoiceInteractionSession(
         finish()
     }
 
-    @Suppress("DEPRECATION")
+    @Deprecated("Platform API is deprecated. Use onHandleAssist(AssistState) instead.")
+    @Suppress("DEPRECATION", "OVERRIDE_DEPRECATION")
     override fun onHandleAssistSecondary(
         data: Bundle?,
         structure: AssistStructure?,
