@@ -24,6 +24,8 @@ import java.util.zip.ZipInputStream
  */
 object ModelManager {
 
+    // ---- Registry entry used by VoskRegistry ----
+
     // ---- Minimal static catalog (kept for defaults/fallbacks) ----
     data class CatalogModel(
         val lang: String,

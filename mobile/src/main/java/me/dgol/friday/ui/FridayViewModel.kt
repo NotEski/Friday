@@ -10,7 +10,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import me.dgol.friday.assistant.intent.LocalIntentEngine
+import me.dgol.friday.intent.LocalIntentEngine
 import me.dgol.friday.model.ModelLocator
 import me.dgol.friday.prefs.ModelPrefs
 import me.dgol.friday.shared.stt.ModelManager
@@ -20,6 +20,7 @@ import java.io.FileOutputStream
 import java.net.URL
 import java.util.zip.ZipEntry
 import java.util.zip.ZipInputStream
+import me.dgol.friday.registry.VoskRegistry
 
 // ---------- Registry / downloads data models ----------
 data class VoskModelMeta(
@@ -120,8 +121,39 @@ class FridayViewModel : ViewModel() {
 
     // ---------- Registry / filters ----------
     fun loadRegistry(ctx: Context) {
-        // Plug your real registry fetch here and produce VoskModelMeta list
-        viewModelScope.launch { /* no-op placeholder */ }
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val entries = VoskRegistry.fetch()
+
+                // Map registry entries -> UI meta
+                val models = entries.map { e ->
+                    VoskModelMeta(
+                        name = e.name,
+                        url = e.url,
+                        sizeBytes = e.sizeBytes ?: 0L,                // unknown => 0 (still shown)
+                        lang = (e.lang.ifBlank { e.langText ?: "en-us" }).lowercase(),
+                        version = e.version ?: "0",
+                        obsolete = e.obsolete
+                    )
+                }
+
+                _ui.update { it.copy(registry = models) }
+
+            } catch (t: Throwable) {
+                // Keep UI usable with a minimal offline fallback
+                val fallback = listOf(
+                    VoskModelMeta(
+                        name = "vosk-model-small-en-us-0.15",
+                        url = "https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip",
+                        sizeBytes = 50_000_000L, // ~50MB rough fallback
+                        lang = "en-us",
+                        version = "0.15",
+                        obsolete = false
+                    )
+                )
+                _ui.update { it.copy(registry = fallback, errorMessage = "Using offline model list (network failed).") }
+            }
+        }
     }
 
     fun setMinSizeMb(v: Int) { _ui.update { it.copy(minSizeMb = v.coerceAtLeast(0)) } }

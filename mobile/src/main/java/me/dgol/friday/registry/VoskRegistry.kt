@@ -33,7 +33,6 @@ object VoskRegistry {
                 is String -> obsoleteAny.equals("true", ignoreCase = true)
                 else -> false
             }
-
             if (obsolete) continue
 
             out += RegistryEntry(

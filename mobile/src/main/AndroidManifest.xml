@@ -12,7 +12,28 @@
         <intent>
             <action android:name="android.service.voice.VoiceInteractionService" />
         </intent>
+
+        <!-- See launcher activities so we can fuzzy-match "open X" -->
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+
+        <!-- We also check/resolve these intents before launching -->
+        <intent>
+            <action android:name="android.intent.action.WEB_SEARCH" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="https" />
+        </intent>
+
+        <!-- Clock/Alarm intents (some devices/emulators differ) -->
+        <intent><action android:name="android.intent.action.SET_ALARM" /></intent>
+        <intent><action android:name="android.intent.action.SET_TIMER" /></intent>
+        <intent><action android:name="android.intent.action.SHOW_ALARMS" /></intent>
     </queries>
+
 
 
 
