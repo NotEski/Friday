@@ -1,6 +1,8 @@
 package me.dgol.friday.ui
 
 import android.content.Context
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -8,8 +10,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import androidx.lifecycle.ViewModel
-import androidx.lifecycle.viewModelScope
+import me.dgol.friday.assistant.intent.LocalIntentEngine
 import me.dgol.friday.model.ModelLocator
 import me.dgol.friday.prefs.ModelPrefs
 import me.dgol.friday.shared.stt.ModelManager
@@ -28,9 +29,7 @@ data class VoskModelMeta(
     val lang: String,           // e.g., "en-us"
     val version: String = "0",
     val obsolete: Boolean = false
-) {
-    val langText: String get() = lang
-}
+) { val langText: String get() = lang }
 
 data class DownloadedModel(
     val lang: String,
@@ -39,11 +38,10 @@ data class DownloadedModel(
     val sizeBytes: Long? = null
 )
 
-// Grouping for selector UI
 data class LanguageGroup(
-    val baseLang: String,       // e.g., "en"
-    val baseLabel: String,      // e.g., "English (en)"
-    val main: VoskModelMeta?,   // preferred/latest for this base
+    val baseLang: String,
+    val baseLabel: String,
+    val main: VoskModelMeta?,
     val children: List<VoskModelMeta>
 )
 
@@ -52,28 +50,16 @@ data class FridayUiState(
     val isListening: Boolean = false,
     val isThinking: Boolean = false,
     val transcript: String = "",
-
-    // Chat
     val input: String = "",
     val messages: List<ChatItem> = emptyList(),
-
-    // Selection
     val selectedLang: String = ModelManager.defaultLang(),
     val selectedName: String? = null,
-
-    // Registry + filters
     val registry: List<VoskModelMeta> = emptyList(),
     val minSizeMb: Int = 0,
     val maxSizeMb: Int = 5000,
-
-    // Installed models
     val downloads: List<DownloadedModel> = emptyList(),
-
-    // Dialogs
     val showPermissionRationale: Boolean = false,
     val errorMessage: String? = null,
-
-    // Busy flags
     val busy: Boolean = false,
     val busyLang: String? = null
 )
@@ -83,18 +69,20 @@ class FridayViewModel : ViewModel() {
     private val _ui = MutableStateFlow(FridayUiState())
     val ui: StateFlow<FridayUiState> = _ui.asStateFlow()
 
+    // App context for executing intents
+    private lateinit var appCtx: Context
+
     // STT engine
     private var engine: VoskEngine? = null
     private var engineSeq = 0
 
-    // ---------- Lifecycle / init ----------
+    // ---------- Lifecycle ----------
     fun init(appContext: Context) {
-        val lang = ModelPrefs.getSelectedLang(appContext, ModelManager.defaultLang())
+        appCtx = appContext.applicationContext
+        val lang = ModelPrefs.getSelectedLang(appCtx, ModelManager.defaultLang())
         _ui.update { it.copy(selectedLang = lang) }
-        if (_ui.value.registry.isEmpty()) {
-            loadRegistry(appContext)
-        }
-        refreshDownloads(appContext)
+        if (_ui.value.registry.isEmpty()) loadRegistry(appCtx)
+        refreshDownloads(appCtx)
     }
 
     // ---------- Dialog helpers ----------
@@ -103,7 +91,7 @@ class FridayViewModel : ViewModel() {
     fun showError(msg: String) { _ui.update { it.copy(errorMessage = msg) } }
     fun dismissError() { _ui.update { it.copy(errorMessage = null) } }
 
-    // ---------- Chat helpers ----------
+    // ---------- Chat ----------
     fun setInput(text: String) { _ui.update { it.copy(input = text) } }
 
     fun sendInputMessage() {
@@ -113,16 +101,26 @@ class FridayViewModel : ViewModel() {
         processUserMessage(msg)
     }
 
-    private fun processUserMessage(text: String) {
-        // TODO: plug your AI/tooling here
-        val reply = "You said: $text"
-        _ui.update { it.copy(messages = it.messages + ChatItem(ChatRole.Assistant, reply)) }
+    private fun postAssistant(text: String) {
+        _ui.update { it.copy(messages = it.messages + ChatItem(ChatRole.Assistant, text)) }
     }
 
-    // ---------- Model registry / filters ----------
+    private fun processUserMessage(text: String) {
+        // 1) Try local regex actions
+        LocalIntentEngine.handle(appCtx, text)?.let { reply ->
+            postAssistant(reply)
+            return
+        }
+        // 2) TODO: NLP (on-device) routing here later
+        // 3) TODO: Home AI (if enabled) routing here later
+
+        // Fallback: simple echo for now
+        postAssistant("You said: $text")
+    }
+
+    // ---------- Registry / filters ----------
     fun loadRegistry(ctx: Context) {
-        // If you already had a networked registry, rewire it here.
-        // For now we keep empty (screens will handle empty state).
+        // Plug your real registry fetch here and produce VoskModelMeta list
         viewModelScope.launch { /* no-op placeholder */ }
     }
 
@@ -136,29 +134,22 @@ class FridayViewModel : ViewModel() {
         val minB = _ui.value.minSizeMb * 1_000_000L
         val maxB = _ui.value.maxSizeMb * 1_000_000L
         val filtered = _ui.value.registry.filter { it.sizeBytes in minB..maxB && !it.obsolete }
-
-        // group by base language (part before '-'), e.g., "en" for "en-us"
         val groups = filtered.groupBy { it.lang.lowercase().substringBefore('-') }
-
-        val groupList = groups.map { (base, items) ->
+        val list = groups.map { (base, items) ->
             val sorted = items.sortedWith(
                 compareByDescending<VoskModelMeta> { it.version }
                     .thenBy { it.sizeBytes }
                     .thenBy { it.name }
             )
-            val main = sorted.firstOrNull()
-            val children = sorted.drop(1)
             LanguageGroup(
                 baseLang = base,
                 baseLabel = "${base.uppercase()} ($base)",
-                main = main,
-                children = children
+                main = sorted.firstOrNull(),
+                children = sorted.drop(1)
             )
         }
-
-        // Popular languages first (English), then alphabetical
         val priority = listOf("en", "es", "de", "fr", "it", "pt", "ru", "zh", "ja", "ko")
-        return groupList.sortedWith(
+        return list.sortedWith(
             compareBy<LanguageGroup> { val i = priority.indexOf(it.baseLang); if (i == -1) Int.MAX_VALUE else i }
                 .thenBy { it.baseLang }
         )
@@ -191,7 +182,6 @@ class FridayViewModel : ViewModel() {
         }
         return out.sortedBy { it.lang }
     }
-
     private fun findModelRootCompat(dir: File): File? {
         dir.walkTopDown().maxDepth(4).forEach { f ->
             if (File(f, "conf/model.conf").exists()) return f
@@ -226,14 +216,12 @@ class FridayViewModel : ViewModel() {
             val target = File(ctx.filesDir, "vosk/${meta.lang}")
             target.deleteRecursively()
             target.mkdirs()
-
             val tmpZip = File.createTempFile("vosk-${meta.lang}", ".zip", ctx.cacheDir)
             try {
                 URL(meta.url).openStream().use { input ->
                     FileOutputStream(tmpZip).use { output -> input.copyTo(output) }
                 }
                 unzip(tmpZip, target)
-                // set as selected & refresh
                 ModelPrefs.setSelectedLang(ctx, meta.lang)
                 _ui.update { it.copy(selectedLang = meta.lang) }
                 refreshDownloads(ctx)
@@ -245,15 +233,12 @@ class FridayViewModel : ViewModel() {
             }
         }
     }
-
     private fun unzip(zipFile: File, destDir: File) {
         ZipInputStream(zipFile.inputStream().buffered()).use { zis ->
             var entry: ZipEntry? = zis.nextEntry
             while (entry != null) {
                 val out = File(destDir, entry.name)
-                if (entry.isDirectory) {
-                    out.mkdirs()
-                } else {
+                if (entry.isDirectory) out.mkdirs() else {
                     out.parentFile?.mkdirs()
                     FileOutputStream(out).use { fos -> zis.copyTo(fos) }
                 }
@@ -263,33 +248,22 @@ class FridayViewModel : ViewModel() {
         }
     }
 
-    // ---------- STT control ----------
+    // ---------- STT ----------
     fun startListening(appContext: Context) {
         if (_ui.value.isListening) return
-
         val lang = _ui.value.selectedLang.ifBlank { ModelManager.defaultLang() }
         _ui.update { it.copy(isListening = true, isThinking = false, errorMessage = null) }
-
         val mySeq = ++engineSeq
-
         viewModelScope.launch {
-            val modelDir = withContext(Dispatchers.IO) {
-                ModelLocator.resolveVoskModelDir(appContext, lang)
-            }
-
+            val modelDir = withContext(Dispatchers.IO) { ModelLocator.resolveVoskModelDir(appContext, lang) }
             if (modelDir == null || !modelDir.exists()) {
                 _ui.update { it.copy(isListening = false, errorMessage = "Model not set up for '$lang'") }
                 return@launch
             }
-
             engine = VoskEngine(
                 appContext = appContext,
                 modelDir = modelDir,
-                onPartial = { partial ->
-                    if (engineSeq == mySeq) {
-                        _ui.update { it.copy(input = partial) }
-                    }
-                },
+                onPartial = { partial -> if (engineSeq == mySeq) _ui.update { it.copy(input = partial) } },
                 onFinal = { final ->
                     if (engineSeq == mySeq) {
                         stopListening()
