@@ -1,4 +1,4 @@
-package me.dgol.friday
+package me.dgol.friday.ui
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity
