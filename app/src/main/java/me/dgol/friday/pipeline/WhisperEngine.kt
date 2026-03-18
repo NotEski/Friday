@@ -8,8 +8,18 @@ class WhisperEngine(private val context: Context) {
     private var contextPointer: Long = 0
 
     //Declares the native functions implemented in jni.c
+    private external fun initContextFromInputStream()
+    private external fun initContextFromAsset()
     private external fun initContext(modelPath: String): Long
     private external fun freeContext(contextPtr: Long)
+    private external fun fullTranscribe()
+    private external fun getTextSegmentCount()
+    private external fun getTextSegment()
+    private external fun getTextSegmentT0()
+    private external fun getTextSegmentT1()
+    private external fun getSystemInfo()
+    private external fun benchMemcpy()
+    private external fun benchGgmlMulMat()
     private external fun transcribe(contextPtr: Long, audioPath: FloatArray): String
 
     companion object {

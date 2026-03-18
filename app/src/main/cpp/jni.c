@@ -67,7 +67,7 @@ void inputStreamClose(void * ctx) {
 }
 
 JNIEXPORT jlong JNICALL
-Java_com_whispercpp_java_whisper_WhisperLib_initContextFromInputStream(
+Java_me_dgol_friday_pipeline_WhisperEngine_initContextFromInputStream(
         JNIEnv *env, jobject thiz, jobject input_stream) {
     UNUSED(thiz);
 
@@ -131,7 +131,7 @@ static struct whisper_context *whisper_init_from_asset(
 }
 
 JNIEXPORT jlong JNICALL
-Java_com_whispercpp_java_whisper_WhisperLib_initContextFromAsset(
+Java_me_dgol_friday_pipeline_WhisperEngine_initContextFromAsset(
         JNIEnv *env, jobject thiz, jobject assetManager, jstring asset_path_str) {
     UNUSED(thiz);
     struct whisper_context *context = NULL;
@@ -161,45 +161,45 @@ Java_me_dgol_friday_pipeline_WhisperEngine_freeContext(
     whisper_free(context);
 }
 
-JNIEXPORT jstring JNICALL
-Java_me_dgol_friday_pipeline_WhisperEngine_transcribe(
-        JNIEnv *env, jobject thiz, jlong context_ptr, jfloatArray audio_data) {
-    UNUSED(thiz);
-    struct whisper_context *context = (struct whisper_context *) context_ptr;
-    jfloat *audio_data_arr = (*env)->GetFloatArrayElements(env, audio_data, NULL);
-    const jsize audio_data_length = (*env)->GetArrayLength(env, audio_data);
-
-    struct whisper_full_params params = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
-    params.print_realtime = false;
-    params.print_progress = false;
-    params.print_timestamps = false;
-    params.print_special = false;
-    params.translate = false;
-    params.language = "en";
-    params.n_threads = 4;
-    params.offset_ms = 0;
-    params.no_context = true;
-    params.single_segment = false;
-
-    if (whisper_full(context, params, audio_data_arr, audio_data_length) != 0) {
-        (*env)->ReleaseFloatArrayElements(env, audio_data, audio_data_arr, JNI_ABORT);
-        return (*env)->NewStringUTF(env, "");
-    }
-
-    // Collect all segments into a single string
-    int n_segments = whisper_full_n_segments(context);
-    char result[4096] = {0};
-    for (int i = 0; i < n_segments; i++) {
-        const char *text = whisper_full_get_segment_text(context, i);
-        strncat(result, text, sizeof(result) - strlen(result) - 1);
-    }
-
-    (*env)->ReleaseFloatArrayElements(env, audio_data, audio_data_arr, JNI_ABORT);
-    return (*env)->NewStringUTF(env, result);
-}
+//JNIEXPORT jstring JNICALL
+//Java_me_dgol_friday_pipeline_WhisperEngine_transcribe(
+//        JNIEnv *env, jobject thiz, jlong context_ptr, jfloatArray audio_data) {
+//    UNUSED(thiz);
+//    struct whisper_context *context = (struct whisper_context *) context_ptr;
+//    jfloat *audio_data_arr = (*env)->GetFloatArrayElements(env, audio_data, NULL);
+//    const jsize audio_data_length = (*env)->GetArrayLength(env, audio_data);
+//
+//    struct whisper_full_params params = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
+//    params.print_realtime = false;
+//    params.print_progress = false;
+//    params.print_timestamps = false;
+//    params.print_special = false;
+//    params.translate = false;
+//    params.language = "en";
+//    params.n_threads = 4;
+//    params.offset_ms = 0;
+//    params.no_context = true;
+//    params.single_segment = false;
+//
+//    if (whisper_full(context, params, audio_data_arr, audio_data_length) != 0) {
+//        (*env)->ReleaseFloatArrayElements(env, audio_data, audio_data_arr, JNI_ABORT);
+//        return (*env)->NewStringUTF(env, "");
+//    }
+//
+//    // Collect all segments into a single string
+//    int n_segments = whisper_full_n_segments(context);
+//    char result[4096] = {0};
+//    for (int i = 0; i < n_segments; i++) {
+//        const char *text = whisper_full_get_segment_text(context, i);
+//        strncat(result, text, sizeof(result) - strlen(result) - 1);
+//    }
+//
+//    (*env)->ReleaseFloatArrayElements(env, audio_data, audio_data_arr, JNI_ABORT);
+//    return (*env)->NewStringUTF(env, result);
+//}
 
 JNIEXPORT void JNICALL
-Java_com_whispercpp_java_whisper_WhisperLib_fullTranscribe(
+Java_me_dgol_friday_pipeline_WhisperEngine_fullTranscribe(
         JNIEnv *env, jobject thiz, jlong context_ptr, jint num_threads, jfloatArray audio_data) {
     UNUSED(thiz);
     struct whisper_context *context = (struct whisper_context *) context_ptr;
@@ -231,7 +231,7 @@ Java_com_whispercpp_java_whisper_WhisperLib_fullTranscribe(
 }
 
 JNIEXPORT jint JNICALL
-Java_com_whispercpp_java_whisper_WhisperLib_getTextSegmentCount(
+Java_me_dgol_friday_pipeline_WhisperEngine_getTextSegmentCount(
         JNIEnv *env, jobject thiz, jlong context_ptr) {
     UNUSED(env);
     UNUSED(thiz);
@@ -241,7 +241,7 @@ Java_com_whispercpp_java_whisper_WhisperLib_getTextSegmentCount(
 
 
 JNIEXPORT jstring JNICALL
-Java_com_whispercpp_java_whisper_WhisperLib_getTextSegment(
+Java_me_dgol_friday_pipeline_WhisperEngine_getTextSegment(
         JNIEnv *env, jobject thiz, jlong context_ptr, jint index) {
     UNUSED(thiz);
     struct whisper_context *context = (struct whisper_context *) context_ptr;
@@ -251,7 +251,7 @@ Java_com_whispercpp_java_whisper_WhisperLib_getTextSegment(
 }
 
 JNIEXPORT jlong JNICALL
-Java_com_whispercpp_java_whisper_WhisperLib_getTextSegmentT0(JNIEnv *env, jobject thiz,jlong context_ptr, jint index) {
+Java_me_dgol_friday_pipeline_WhisperEngine_getTextSegmentT0(JNIEnv *env, jobject thiz,jlong context_ptr, jint index) {
     UNUSED(thiz);
     struct whisper_context *context = (struct whisper_context *) context_ptr;
     const int64_t t0 = whisper_full_get_segment_t0(context, index);
@@ -259,7 +259,7 @@ Java_com_whispercpp_java_whisper_WhisperLib_getTextSegmentT0(JNIEnv *env, jobjec
 }
 
 JNIEXPORT jlong JNICALL
-Java_com_whispercpp_java_whisper_WhisperLib_getTextSegmentT1(JNIEnv *env, jobject thiz,jlong context_ptr, jint index) {
+Java_me_dgol_friday_pipeline_WhisperEngine_getTextSegmentT1(JNIEnv *env, jobject thiz,jlong context_ptr, jint index) {
     UNUSED(thiz);
     struct whisper_context *context = (struct whisper_context *) context_ptr;
     const int64_t t1 = whisper_full_get_segment_t1(context, index);
@@ -267,7 +267,7 @@ Java_com_whispercpp_java_whisper_WhisperLib_getTextSegmentT1(JNIEnv *env, jobjec
 }
 
 JNIEXPORT jstring JNICALL
-Java_com_whispercpp_java_whisper_WhisperLib_getSystemInfo(
+Java_me_dgol_friday_pipeline_WhisperEngine_getSystemInfo(
         JNIEnv *env, jobject thiz
 ) {
     UNUSED(thiz);
@@ -277,7 +277,7 @@ Java_com_whispercpp_java_whisper_WhisperLib_getSystemInfo(
 }
 
 JNIEXPORT jstring JNICALL
-Java_com_whispercpp_java_whisper_WhisperLib_benchMemcpy(JNIEnv *env, jobject thiz,
+Java_me_dgol_friday_pipeline_WhisperEngine_benchMemcpy(JNIEnv *env, jobject thiz,
                                                                       jint n_threads) {
     UNUSED(thiz);
     const char *bench_ggml_memcpy = whisper_bench_memcpy_str(n_threads);
@@ -287,7 +287,7 @@ Java_com_whispercpp_java_whisper_WhisperLib_benchMemcpy(JNIEnv *env, jobject thi
 }
 
 JNIEXPORT jstring JNICALL
-Java_com_whispercpp_java_whisper_WhisperLib_benchGgmlMulMat(JNIEnv *env, jobject thiz,
+Java_me_dgol_friday_pipeline_WhisperEngine_benchGgmlMulMat(JNIEnv *env, jobject thiz,
                                                                           jint n_threads) {
     UNUSED(thiz);
     const char *bench_ggml_mul_mat = whisper_bench_ggml_mul_mat_str(n_threads);
